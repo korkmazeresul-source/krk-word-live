@@ -24,7 +24,7 @@ async function connect(){
  const C=TikTok.TikTokLiveConnection||TikTok.WebcastPushConnection;
  if(!C){status('connector_incompatible');return;}
  try{
- if(connection)await Promise.resolve(connection.disconnect()).catch(()=>{});console.log('[TikTok] Connecting to @'+username);const c=connection=new C(username);
+ if(connection)await Promise.resolve(connection.disconnect()).catch(()=>{});console.log('[TikTok] Connecting to @'+username);const c=connection=new C(username,{processInitialData:false,fetchRoomInfoOnConnect:true});
  c.on('chat',d=>{if(g!==generation||!unique((d.msgId??d.common?.msgId)?'chat:'+(d.msgId??d.common?.msgId):null))return;const user=d.uniqueId??d.user?.uniqueId??d.user?.username;const comment=String(d.comment??'').trim().slice(0,300);if(user&&comment)publish('chat',{user:String(user),comment});});
  c.on('gift',d=>{if(g!==generation)return;
  const type=Number(d.giftType??d.giftDetails?.giftType??0),end=d.repeatEnd===true||d.repeatEnd===1||d.repeatEnd==='1';
@@ -39,7 +39,7 @@ async function connect(){
  status('connecting');await c.connect();if(g===generation){attempts=0;lastError='';console.log('[TikTok] Connected');status('connected');}
  }catch(e){if(g===generation){lastError=explain(e);report(e);io.emit('notice',lastError);retry(g);}}
 }
-app.get('/health',(_,res)=>res.json({ok:true,state,version:27}));
+app.get('/health',(_,res)=>res.json({ok:true,state,version:29}));
 app.use(express.static('public'));
 io.on('connection',s=>{const name=String(s.handshake.auth.username||'').trim().replace(/^@/,'').toLowerCase();if(name&&/^[a-z0-9_.]{1,24}$/.test(name))changeAccount(name);s.emit('status',snapshot());s.on('diagnostics',()=>s.emit('diagnostics',{...snapshot(),...metrics}));});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>{console.log('KRK WORD LIVE ready');connect();});
