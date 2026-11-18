@@ -5,7 +5,8 @@ import * as TikTok from 'tiktok-live-connector';
 import {timingSafeEqual} from 'node:crypto';
 const app=express(), server=createServer(app), io=new Server(server);
 const token=process.env.ADMIN_TOKEN;
-const username=(process.env.TIKTOK_USERNAME||'').replace(/^@/,'');
+const username=(process.env.TIKTOK_USERNAME||'').trim().replace(/^@/,'');
+function report(e){const raw=String(e?.message||e||'Unknown error');const safe=raw.replace(/https?:\/\/[^\s]+/gi,'[URL]').replace(/(?:token|cookie|sessionid|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,'[REDACTED]');console.warn('[TikTok]',token?safe.split(token).join('[REDACTED]').slice(0,300):safe.slice(0,300));}
 let connection, state='idle', timer, attempts=0, generation=0;
 const seen=new Map(), streaks=new Map();const metrics={chat:0,gift:0,duplicates:0,lastChat:null,lastGift:null};let sequence=0;const backlog=[];function publish(kind,data){const event={...data,eventId:++sequence};backlog.push({kind,event});if(backlog.length>1000)backlog.shift();io.emit(kind,event);metrics[kind]++;metrics[kind==='chat'?'lastChat':'lastGift']=new Date().toISOString();}
 function status(s){state=s;io.emit('status',{state:s});}
@@ -19,7 +20,7 @@ async function connect(){
  const C=TikTok.TikTokLiveConnection||TikTok.WebcastPushConnection;
  if(!C){status('connector_incompatible');return;}
  try{
- connection?.disconnect();const c=connection=new C(username);
+ if(connection)await Promise.resolve(connection.disconnect()).catch(()=>{});console.log('[TikTok] Connecting to @'+username);const c=connection=new C(username);
  c.on('chat',d=>{if(g!==generation||!unique((d.msgId??d.common?.msgId)?'chat:'+(d.msgId??d.common?.msgId):null))return;const user=d.uniqueId??d.user?.uniqueId??d.user?.username;const comment=String(d.comment??'').trim().slice(0,300);if(user&&comment)publish('chat',{user:String(user),comment});});
  c.on('gift',d=>{if(g!==generation)return;
  const type=Number(d.giftType??d.giftDetails?.giftType??0),end=d.repeatEnd===true||d.repeatEnd===1||d.repeatEnd==='1';
@@ -30,11 +31,11 @@ async function connect(){
  const id=d.msgId??d.common?.msgId;if(!unique(id?'gift:'+id:null))return;
  if(group&&type===1){const key=[user,gift,group].join(':');if(streaks.has(key)){metrics.duplicates++;return;}streaks.set(key,true);if(streaks.size>10000)streaks.delete(streaks.keys().next().value);}
  publish('gift',{user:String(user),giftId:gift,name,count,diamondCount:unit});});
- c.on('disconnected',()=>retry(g));c.on('streamEnd',()=>retry(g));c.on('error',()=>{if(g===generation)io.emit('notice','TikTok connector error');});
- status('connecting');await c.connect();if(g===generation){attempts=0;status('connected');}
- }catch(e){if(g===generation){io.emit('notice',String(e.message||e).slice(0,200));retry(g);}}
+ c.on('disconnected',()=>{if(g===generation)console.log('[TikTok] Disconnected');retry(g)});c.on('streamEnd',()=>{if(g===generation)console.log('[TikTok] Stream ended');retry(g)});c.on('error',e=>{if(g===generation){report(e);io.emit('notice','TikTok connector error');}});
+ status('connecting');await c.connect();if(g===generation){attempts=0;console.log('[TikTok] Connected');status('connected');}
+ }catch(e){if(g===generation){report(e);io.emit('notice','TikTok connection failed; check server logs');retry(g);}}
 }
-app.get('/health',(_,res)=>res.json({ok:true,state,version:18}));
+app.get('/health',(_,res)=>res.json({ok:true,state,version:26}));
 app.use(express.static('public'));
 io.on('connection',s=>{s.emit('status',{state});s.on('diagnostics',()=>s.emit('diagnostics',{state,...metrics}));});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>{console.log('KRK WORD LIVE ready');connect();});
