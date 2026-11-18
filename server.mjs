@@ -7,11 +7,11 @@ const app=express(), server=createServer(app), io=new Server(server);
 const token=process.env.ADMIN_TOKEN;
 const username=(process.env.TIKTOK_USERNAME||'').replace(/^@/,'');
 let connection, state='idle', timer, attempts=0, generation=0;
-const seen=new Map(), streaks=new Map();
+const seen=new Map(), streaks=new Map();const metrics={chat:0,gift:0,duplicates:0,lastChat:null,lastGift:null};let sequence=0;const backlog=[];function publish(kind,data){const event={...data,eventId:++sequence};backlog.push({kind,event});if(backlog.length>1000)backlog.shift();io.emit(kind,event);metrics[kind]++;metrics[kind==='chat'?'lastChat':'lastGift']=new Date().toISOString();}
 function status(s){state=s;io.emit('status',{state:s});}
 function valid(t){const a=Buffer.from(String(t||'')),b=Buffer.from(token||'');return !!b.length&&a.length===b.length&&timingSafeEqual(a,b);}
 io.use((socket,next)=>valid(socket.handshake.auth.token)?next():next(new Error('Unauthorized')));
-function unique(id){if(!id)return true;id=String(id);if(seen.has(id))return false;seen.set(id,Date.now());if(seen.size>10000)seen.delete(seen.keys().next().value);return true;}
+function unique(id){if(!id)return true;id=String(id);if(seen.has(id)){metrics.duplicates++;return false;}seen.set(id,Date.now());if(seen.size>10000)seen.delete(seen.keys().next().value);return true;}
 function retry(g){if(g!==generation||timer)return;status('retrying');timer=setTimeout(()=>{timer=null;connect();},Math.min(60000,2000*2**Math.min(attempts++,5)));}
 async function connect(){
  const g=++generation;
@@ -20,18 +20,21 @@ async function connect(){
  if(!C){status('connector_incompatible');return;}
  try{
  connection?.disconnect();const c=connection=new C(username);
- c.on('chat',d=>{if(g!==generation||!unique(d.msgId??d.common?.msgId))return;io.emit('chat',{user:d.uniqueId??d.user?.uniqueId??'unknown',comment:String(d.comment??'').slice(0,300)});});
- c.on('gift',d=>{if(g!==generation)return;const type=d.giftType??d.giftDetails?.giftType;if(type===1&&!d.repeatEnd)return;
- const id=d.msgId??d.common?.msgId;
- const group=d.groupId??d.group_id;const user=d.uniqueId??d.user?.uniqueId??'unknown';const gift=d.giftId??d.giftDetails?.giftId;
- if(!unique(id))return;
- if(group&&type===1){const key=[user,gift,group].join(':');if(streaks.has(key))return;streaks.set(key,true);if(streaks.size>10000)streaks.delete(streaks.keys().next().value);}
- io.emit('gift',{user,giftId:gift,name:d.giftName??d.giftDetails?.giftName??'Gift',count:Number(d.repeatCount??1),diamondCount:Number(d.diamondCount??d.giftDetails?.diamondCount??0)});});
+ c.on('chat',d=>{if(g!==generation||!unique((d.msgId??d.common?.msgId)?'chat:'+(d.msgId??d.common?.msgId):null))return;const user=d.uniqueId??d.user?.uniqueId??d.user?.username;const comment=String(d.comment??'').trim().slice(0,300);if(user&&comment)publish('chat',{user:String(user),comment});});
+ c.on('gift',d=>{if(g!==generation)return;
+ const type=Number(d.giftType??d.giftDetails?.giftType??0),end=d.repeatEnd===true||d.repeatEnd===1||d.repeatEnd==='1';
+ const user=d.uniqueId??d.user?.uniqueId??d.user?.username;const gift=d.giftId??d.giftDetails?.giftId;const count=Math.floor(Number(d.repeatCount??1)),unit=Number(d.diamondCount??d.giftDetails?.diamondCount??0);
+ if(!user||!Number.isSafeInteger(count)||count<1||!Number.isFinite(unit)||unit<=0)return;
+ const name=d.giftName??d.giftDetails?.giftName??'Gift';const group=d.groupId??d.group_id;
+ if(type===1&&!end){io.emit('giftProgress',{user:String(user),giftId:gift,name,count,diamondCount:unit});return;}
+ const id=d.msgId??d.common?.msgId;if(!unique(id?'gift:'+id:null))return;
+ if(group&&type===1){const key=[user,gift,group].join(':');if(streaks.has(key)){metrics.duplicates++;return;}streaks.set(key,true);if(streaks.size>10000)streaks.delete(streaks.keys().next().value);}
+ publish('gift',{user:String(user),giftId:gift,name,count,diamondCount:unit});});
  c.on('disconnected',()=>retry(g));c.on('streamEnd',()=>retry(g));c.on('error',()=>{if(g===generation)io.emit('notice','TikTok connector error');});
  status('connecting');await c.connect();if(g===generation){attempts=0;status('connected');}
  }catch(e){if(g===generation){io.emit('notice',String(e.message||e).slice(0,200));retry(g);}}
 }
-app.get('/health',(_,res)=>res.json({ok:true,state}));
+app.get('/health',(_,res)=>res.json({ok:true,state,version:18}));
 app.use(express.static('public'));
-io.on('connection',s=>s.emit('status',{state}));
+io.on('connection',s=>{s.emit('status',{state});s.on('diagnostics',()=>s.emit('diagnostics',{state,...metrics}));});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>{console.log('KRK WORD LIVE ready');connect();});
