@@ -17,7 +17,7 @@ function valid(t){const a=Buffer.from(String(t||'')),b=Buffer.from(token||'');re
 io.use((socket,next)=>valid(socket.handshake.auth.token)?next():next(new Error('Unauthorized')));
 function unique(id){if(!id)return true;id=String(id);if(seen.has(id)){metrics.duplicates++;return false;}seen.set(id,Date.now());if(seen.size>10000)seen.delete(seen.keys().next().value);return true;}
 function changeAccount(name){if(name===username)return;username=name;generation++;clearTimeout(timer);timer=null;attempts=0;lastError='';status('connecting');connect();}
-function retry(g){if(g!==generation||timer)return;status('retrying');timer=setTimeout(()=>{timer=null;connect();},Math.min(60000,2000*2**Math.min(attempts++,5)));}
+function retry(g){if(g!==generation||timer)return;status('retrying');timer=setTimeout(()=>{timer=null;connect();},(/istek sınırı/i.test(lastError)?Math.min(1800000,300000*2**Math.min(attempts++,3)):Math.min(300000,15000*2**Math.min(attempts++,5))));}
 async function connect(){
  const g=++generation;
  if(!username||!token){status('configuration_required');return;}
@@ -39,7 +39,7 @@ async function connect(){
  status('connecting');await c.connect();if(g===generation){attempts=0;lastError='';console.log('[TikTok] Connected');status('connected');}
  }catch(e){if(g===generation){lastError=explain(e);report(e);io.emit('notice',lastError);retry(g);}}
 }
-app.get('/health',(_,res)=>res.json({ok:true,state,version:29}));
+app.get('/health',(_,res)=>res.json({ok:true,state,version:30}));
 app.use(express.static('public'));
 io.on('connection',s=>{const name=String(s.handshake.auth.username||'').trim().replace(/^@/,'').toLowerCase();if(name&&/^[a-z0-9_.]{1,24}$/.test(name))changeAccount(name);s.emit('status',snapshot());s.on('diagnostics',()=>s.emit('diagnostics',{...snapshot(),...metrics}));});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>{console.log('KRK WORD LIVE ready');connect();});
